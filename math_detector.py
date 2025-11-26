@@ -1,87 +1,91 @@
-# math_detector.py
 import numpy as np
 from PIL import Image, ImageDraw
 
 
 # --------------------------
-# 1. Compute 16x16 texture grid (edge-based)
+# 1. Compute 16x16 texture grid 
 # --------------------------
 def compute_texture_grid(original_img, grid_size=16):
+
+    # 1) Convert to grayscale
     gray = original_img.convert("L")
-    arr = np.array(gray, dtype=np.float32) / 255.0
+    arr = np.array(gray, dtype=np.float32)  # (H, W)
 
     H, W = arr.shape
     cell_h = H // grid_size
     cell_w = W // grid_size
 
-    # Edge strength using gradients
-    gx, gy = np.gradient(arr)
-    edge_mag = np.sqrt(gx**2 + gy**2)
+    if cell_h == 0 or cell_w == 0:
+        raise ValueError("Image too small for the chosen grid size.")
 
-    # Crop to fit grid
+    # 2) Crop to fit full grid
     H_crop = cell_h * grid_size
     W_crop = cell_w * grid_size
-    cropped = edge_mag[:H_crop, :W_crop]
+    arr_cropped = arr[:H_crop, :W_crop]
 
-    # Reshape into blocks
-    blocks = cropped.reshape(grid_size, cell_h, grid_size, cell_w)
+    # 3) Init result grid
+    std_grid = np.zeros((grid_size, grid_size), dtype=np.float32)
 
-    # Mean edge magnitude per block
-    edge_grid = blocks.mean(axis=(1, 3))
+    # 4) Compute std per block
+    for y in range(grid_size):
+        for x in range(grid_size):
+            block = arr_cropped[
+                y * cell_h : (y + 1) * cell_h,
+                x * cell_w : (x + 1) * cell_w
+            ]
+            std_grid[y, x] = block.std()
 
-    # Normalize 0–1
-    e_min = edge_grid.min()
-    e_max = edge_grid.max()
-    grid_vals = (edge_grid - e_min) / (e_max - e_min + 1e-8)
+    # 5) Map std values to [0,1] 
+    grid_vals = std_grid / 64.0
+    grid_vals = np.clip(grid_vals, 0.0, 1.0)
 
     return grid_vals
 
 
 # --------------------------
-# 2. Label for math detector
+# 2. Get label from texture score
 # --------------------------
 def get_math_label(texture_score):
-    if texture_score < 0.12:
-        return "Likely AI (smooth / low edges)"
-    elif texture_score > 0.22:
-        return "Likely Real (high detail / edges)"
+    if texture_score < 0.25:
+        return "AI"
+    elif texture_score > 0.45:
+        return "Real"
     else:
-        return "Uncertain (medium texture)"
+        return "Uncertain"
 
 
 # --------------------------
-# 3. Create colored 16×16 grid overlay
+# 3. Create colored overlay grid
 # --------------------------
 def create_math_grid_overlay(original_img, grid_vals, overlay_alpha=0.5):
+
     grid_size = grid_vals.shape[0]
 
-    # 3 color quantization
-    bins = np.digitize(grid_vals, [0.4, 0.7])
-    color_map = np.array(
-        [
-            [0, 255, 0],      # green
-            [255, 255, 0],    # yellow
-            [255, 0, 0],      # red
-        ], dtype=np.uint8
-    )
+    bins = np.digitize(grid_vals, [0.3, 0.6])  # 0,1,2
+    color_map = np.array([
+        [0, 255, 0],     # green = smooth = low std = likely AI
+        [255, 255, 0],   # yellow = medium std
+        [255, 0, 0],     # red = high std = likely Real
+    ], dtype=np.uint8)
 
     colored_small = color_map[bins]
 
-    # Upscale
+    # Upscale to original size
     heatmap_img = Image.fromarray(colored_small).resize(
-        original_img.size, resample=Image.NEAREST
+        original_img.size,
+        resample=Image.NEAREST
     )
 
-    # Blend
+    # Blend overlay
     base = original_img.convert("RGBA")
     overlay = Image.blend(base, heatmap_img.convert("RGBA"), alpha=overlay_alpha)
 
-    # Draw grid
+    # Draw grid lines
     draw = ImageDraw.Draw(overlay)
     w, h = overlay.size
     cell_w = w / grid_size
     cell_h = h / grid_size
-    grid_color = (0, 0, 0, 160)
+    grid_color = (0, 0, 0, 150)
 
     for i in range(grid_size + 1):
         draw.line([(i * cell_w, 0), (i * cell_w, h)], fill=grid_color)

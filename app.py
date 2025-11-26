@@ -13,6 +13,27 @@ from math_detector import (
 MODEL_PATH = "models/ai_detector_model.h5"
 IMG_SIZE = (224, 224)
 
+# -----------------------
+# CUSTOM CSS (reduce spacing to fit screen)
+# -----------------------
+st.markdown("""
+<style>
+    /* Remove top padding */
+    .block-container {
+        padding-top: 1rem;
+        padding-bottom: 1rem;
+    }
+    /* Reduce spacing between elements */
+    .element-container {
+        margin-bottom: 0.4rem;
+    }
+    /* Reduce header size */
+    h1, h2, h3, h4 {
+        margin-top: 0.4rem;
+        margin-bottom: 0.4rem;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # -----------------------
 # LOAD MODEL
@@ -20,7 +41,6 @@ IMG_SIZE = (224, 224)
 @st.cache_resource
 def load_model():
     return tf.keras.models.load_model(MODEL_PATH)
-
 
 model = load_model()
 
@@ -38,103 +58,112 @@ def preprocess_image(file, target_size=IMG_SIZE):
 # STREAMLIT UI
 # -----------------------
 st.set_page_config(
-    page_title="AI Image Detection (CNN + Math)",
+    page_title="AI Detector",
     page_icon="🧠",
     layout="wide",
 )
 
-st.title("🧠 AI-Generated Image Detection")
-st.caption("Upload once • Get two views: CNN prediction and math-based texture analysis")
+st.title("🧠 AI Image Detection")
+st.caption("Upload once • View CNN prediction & math heatmap side-by-side")
 
-left_col, right_col = st.columns([1, 1], gap="large")
+# Keep same main columns
+left_col, right_col = st.columns([0.9, 1.1], gap="small")
 
-# ===== LEFT: upload + image only =====
+
+# ============================
+# LEFT PANEL — UPLOAD
+# ============================
 with left_col:
-    st.subheader("Image Upload")
-
+    st.subheader("Upload Image")
     uploaded_file = st.file_uploader(
-        "Upload an image (.jpg, .jpeg, .png)",
+        "Upload (.jpg, .jpeg, .png)",
         type=["jpg", "jpeg", "png"],
+        label_visibility="collapsed"
     )
 
     img_array = None
     img_resized = None
 
-    if uploaded_file is not None:
+    if uploaded_file:
         img_array, img_resized = preprocess_image(uploaded_file, target_size=IMG_SIZE)
-        st.image(
-            img_resized,
-            caption="Input image (224×224)",
-            use_container_width=True,
-        )
+
+        # Force image to be small enough to avoid scrolling
+        st.image(img_resized, caption="Input (224×224)", width=300)
     else:
         st.info("Upload an image to begin.")
 
 
-# ===== RIGHT: CNN result + math result + grid =====
+# ============================
+# RIGHT PANEL — GRID + RESULTS
+# ============================
 with right_col:
-    st.subheader("Result")
+    st.subheader("Analysis Results")
 
-    if uploaded_file is not None and img_array is not None and img_resized is not None:
-        # ---------- 1. CNN MODEL RESULT ----------
-        st.markdown("### 🧠 CNN (Model) Prediction")
+    if uploaded_file and img_array is not None:
 
+        # ---- Compute everything once ----
         preds = model.predict(img_array)
-        ai_prob = float(preds[0][0]) 
-        real_prob = 1.0 - ai_prob
-        cnn_label = "AI-Generated" if ai_prob >= 0.5 else "Real"
 
-        c1, c2 = st.columns(2)
-        with c1:
-            st.metric(label="Label (CNN)", value=cnn_label)
-        with c2:
-            st.metric(label="AI Probability (CNN)", value=f"{ai_prob*100:.1f}%")
+        # IMPORTANT: assume model output is P(real), not P(ai)
+        real_prob = float(preds[0][0])
+        ai_prob = 1.0 - real_prob
 
-        st.markdown("**AI Confidence**")
-        st.progress(int(ai_prob * 100))
-        st.caption(
-            f"CNN real probability: {real_prob*100:.1f}% • "
-            "Threshold: 0.5 (≥ 50% = AI-generated)."
-        )
+        cnn_label = "Real" if real_prob >= 0.5 else "AI"
 
-        st.divider()
-
-        # ---------- 2. MATH-BASED RESULT ----------
-        st.markdown("### 📐 Math-Based Texture Analysis (16×16 Grid)")
-
-        # Compute 16×16 texture/edge grid
-        texture_grid = compute_texture_grid(img_resized, grid_size=16)
-        texture_score = float(texture_grid.mean())  # 0–1
+        # Math texture grid (std-based from math_detector.py)
+        texture_grid = compute_texture_grid(img_resized, 16)
+        texture_score = float(texture_grid.mean())
         math_label = get_math_label(texture_score)
 
-        m3, m4 = st.columns(2)
-        with m3:
-            # Show only the short label (before bracket)
-            short_label = math_label.split(" (")[0]
-            st.metric(label="Label (Math)", value=short_label)
-        with m4:
-            st.metric(label="Texture Score", value=f"{texture_score:.2f}")
-
-        st.caption(
-            "Texture score is computed from edge/gradient strength in each of the "
-            "16×16 blocks. Higher score = more local detail and edges."
-        )
-
-        # Visualize math heatmap with 16×16 grid overlay
         overlay_img = create_math_grid_overlay(
             img_resized,
             texture_grid,
-            overlay_alpha=0.5,
+            overlay_alpha=0.5
         )
 
-        st.image(
-            overlay_img,
-            caption=(
-                "Math-based 16×16 grid • "
-                "Green = smooth • Yellow = medium detail • Red = highly detailed/edgy"
-            ),
-            use_container_width=True,
-        )
+        # ---- Split right panel: LEFT = grid, RIGHT = CNN + Math results ----
+        grid_col, info_col = st.columns([1, 1], gap="small")
+
+        # LEFT SIDE: heatmap grid
+        with grid_col:
+            st.markdown("#### 📐 Texture Heatmap (16×16 Grid)")
+            st.image(
+                overlay_img,
+                caption="Green = smooth • Yellow = medium detail • Red = high detail",
+                use_container_width=True,
+            )
+
+        # RIGHT SIDE: CNN + Math stacked
+        with info_col:
+            # CNN block
+            st.markdown("#### 🧠 CNN Prediction")
+
+            c1, c2 = st.columns(2)
+            with c1:
+                st.metric("Label (CNN)", cnn_label)
+            with c2:
+                st.metric("AI Probability", f"{ai_prob*100:.1f}%")
+
+            st.progress(int(ai_prob * 100))
+            st.caption(
+                f"Real probability: {real_prob*100:.1f}% • Threshold: 50% (>= 50% = Real)."
+            )
+
+            st.markdown("---")
+
+            # Math block
+            st.markdown("#### 📏 Math-Based Texture Result")
+
+            c3, c4 = st.columns(2)
+            with c3:
+                st.metric("Label (Math)", math_label)
+            with c4:
+                st.metric("Texture Score", f"{texture_score:.2f}")
+
+            st.caption(
+                "Texture score is based on local brightness variation (standard deviation) "
+                "over a 16×16 grid. Low = smooth (AI), High = textured (Real)."
+            )
 
     else:
-        st.info("CNN result and math-based grid will appear here after you upload an image.")
+        st.info("Results will appear here after uploading an image.")
